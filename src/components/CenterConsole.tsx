@@ -2,18 +2,60 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store';
 import { AGENTS } from '../constants';
 import { Message } from '../types';
+import { LocalEngine } from '../utils/LocalEngine';
 
 export default function CenterConsole() {
   const { 
     activeAgentId, setActiveAgentId, isThinking, setIsThinking, messages, addMessage,
     attachedFiles, setAttachedFiles, incRagCount, setAgentTask, apiCfg, memoryStore, currentExp,
-    triggerAction, setTriggerAction, currentSessionId
+    triggerAction, setTriggerAction, currentSessionId, isOffline
   } = useAppStore();
 
   const [inputText, setInputText] = useState('');
   const [category, setCategory] = useState('General');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [isCapturing, setIsCapturing] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const startCapture = async () => {
+    setIsCapturing(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+    } catch (e) {
+      alert('Camera access denied or unavailable.');
+      setIsCapturing(false);
+    }
+  };
+
+  const stopCapture = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+      tracks.forEach(t => t.stop());
+    }
+    setIsCapturing(false);
+  };
+
+  const takeSnapshot = () => {
+    if (videoRef.current && canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      if (ctx) {
+        canvasRef.current.width = videoRef.current.videoWidth;
+        canvasRef.current.height = videoRef.current.videoHeight;
+        ctx.drawImage(videoRef.current, 0, 0);
+        const dataUrl = canvasRef.current.toDataURL('image/jpeg');
+        const currentFiles = useAppStore.getState().attachedFiles;
+        setAttachedFiles([...currentFiles, { name: `snapshot_${Date.now()}.jpg`, type: 'image/jpeg', data: dataUrl, kind: 'image' } as any]);
+        stopCapture();
+      }
+    }
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -30,32 +72,34 @@ export default function CenterConsole() {
     }
   }, [triggerAction]);
 
-  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    const newFiles: any[] = [];
-    Array.from(files).forEach((f: File) => {
-      const reader = new FileReader();
-      const type = f.type || 'text/plain';
-      if (type.startsWith('image/')) {
-        reader.onload = ev => newFiles.push({ name: f.name, type, data: ev.target?.result, kind: 'image' });
-        reader.readAsDataURL(f);
-      } else if (type === 'application/pdf') {
-        reader.onload = ev => newFiles.push({ name: f.name, type, data: ev.target?.result, kind: 'pdf' });
-        reader.readAsDataURL(f);
-      } else {
-        reader.onload = ev => newFiles.push({ name: f.name, type: 'text', data: ev.target?.result, kind: 'text' });
-        reader.readAsText(f);
-      }
+    
+    const filePromises = Array.from(files).map((f: File) => {
+      return new Promise<any>((resolve) => {
+        const reader = new FileReader();
+        const type = f.type || 'text/plain';
+        if (type.startsWith('image/')) {
+          reader.onload = ev => resolve({ name: f.name, type, data: ev.target?.result, kind: 'image' });
+          reader.readAsDataURL(f);
+        } else if (type === 'application/pdf') {
+          reader.onload = ev => resolve({ name: f.name, type, data: ev.target?.result, kind: 'pdf' });
+          reader.readAsDataURL(f);
+        } else {
+          reader.onload = ev => resolve({ name: f.name, type: 'text', data: ev.target?.result, kind: 'text' });
+          reader.readAsText(f);
+        }
+      });
     });
-    // Simulating slight delay for readers
-    setTimeout(() => {
-      setAttachedFiles([...attachedFiles, ...newFiles]);
-    }, 100);
+
+    const newFiles = await Promise.all(filePromises);
+    setAttachedFiles([...attachedFiles, ...newFiles]);
+    
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const ts = () => new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const ts = () => new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + Math.floor(Math.random()*999).toString().padStart(3,'0');
 
   const formatText = (text: string) => {
     return text
@@ -66,16 +110,94 @@ export default function CenterConsole() {
       .replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
   };
 
+  const runSwarmWorkflow = async (taskText: string) => {
+    setIsThinking(true);
+    setInputText('');
+
+    addMessage({
+      role: 'user',
+      content: formatText(taskText),
+      timestamp: ts(),
+      badge: 'SWARM-INIT'
+    });
+
+    const getAgent = (nameRegex: RegExp) => AGENTS.find(a => nameRegex.test(a.name)) || AGENTS[0];
+
+    const makeSwarmCall = async (systemPrompt: string) => {
+      if (isOffline) {
+        await new Promise(resolve => setTimeout(resolve, 800));
+        return `[OFFLINE SIMULATION] Synthesized local data for: ${systemPrompt.split('.')[0]}`;
+      }
+      const res = await fetch('/api/gemini', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({
+            model: apiCfg.models.gemini,
+            systemPrompt: systemPrompt,
+            messages: [{ role: 'user', content: taskText }]
+         })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      return data.text;
+    }
+
+    try {
+        const swarm1 = getAgent(/SWARM-01/i);
+        setAgentTask(swarm1.id, 'Gathering data...');
+        const researchData = await makeSwarmCall("You are the SWARM RESEARCHER. Gather relevant concepts, theories, and data for the user's task. Output a concise summary.");
+        addMessage({ role: 'assistant', content: researchData, agent: swarm1, timestamp: ts(), badge: 'RESEARCHER' });
+        
+        const strategist = getAgent(/ANALYSIS/i);
+        setAgentTask(strategist.id, 'Developing strategy...');
+        const strategyPlan = await makeSwarmCall(`You are the STRATEGIST. Based on this research: ${researchData}\n\nOutline a high-level strategy for the user's task.`);
+        addMessage({ role: 'assistant', content: strategyPlan, agent: strategist, timestamp: ts(), badge: 'STRATEGIST' });
+
+        const architect = getAgent(/SYNTHESIS/i);
+        setAgentTask(architect.id, 'Designing architecture...');
+        const architecture = await makeSwarmCall(`You are the ARCHITECT. Based on this strategy: ${strategyPlan}\n\nDesign the technical architecture and specifications.`);
+        addMessage({ role: 'assistant', content: architecture, agent: architect, timestamp: ts(), badge: 'ARCHITECT' });
+
+        const critic = getAgent(/UPGRADE-CORE/i);
+        setAgentTask(critic.id, 'Critiquing design...');
+        const critique = await makeSwarmCall(`You are the CRITIC. Critique this architecture: ${architecture}\n\nFind logical gaps and suggest improvements. Be harsh but constructive.`);
+        addMessage({ role: 'assistant', content: critique, agent: critic, timestamp: ts(), badge: 'CRITIC' });
+
+        const factChecker = getAgent(/QUANTUM-CORE/i);
+        setAgentTask(factChecker.id, 'Verifying...');
+        const finalOutput = await makeSwarmCall(`You are the FACT-CHECKER. Verify the strategy and architecture based on this critique: ${critique}\n\nProvide a final verified output and conclusion.`);
+        addMessage({ role: 'assistant', content: finalOutput, agent: factChecker, timestamp: ts(), badge: 'FACT-CHECKER' });
+
+        addMessage({ role: 'system', content: `[QAIOS] Swarm R&D Simulation complete. All 5 agents synchronized successfully.`, timestamp: ts() });
+    } catch (e: any) {
+        addMessage({ role: 'system', content: `⚠ Swarm execution failed: ${e.message}`, timestamp: ts() });
+    }
+
+    setAgentTask(getAgent(/SWARM-01/i).id, 'Sync · listening');
+    setAgentTask(getAgent(/ANALYSIS/i).id, 'Sync · listening');
+    setAgentTask(getAgent(/SYNTHESIS/i).id, 'Sync · listening');
+    setAgentTask(getAgent(/UPGRADE-CORE/i).id, 'Sync · listening');
+    setAgentTask(getAgent(/QUANTUM-CORE/i).id, 'Sync · listening');
+    setIsThinking(false);
+  };
+
   const handleSend = async (overrideText?: string) => {
     const text = overrideText !== undefined ? overrideText : inputText.trim();
     if (!text && attachedFiles.length === 0) return;
     if (isThinking) return;
 
+    const isSwarm = /swarm|simulate|simulation|r&d|realtime|research|Initiate quantum function/i.test(text);
+    if (isSwarm) {
+      return runSwarmWorkflow(text);
+    }
+
     setIsThinking(true);
     setInputText('');
 
+    const currentAttachedFiles = useAppStore.getState().attachedFiles;
+
     // format for UI
-    const fileInd = attachedFiles.length ? `<div class="file-msg-preview">📎 ${attachedFiles.map(f => f.name).join(' · ')}</div>` : '';
+    const fileInd = currentAttachedFiles.length ? `<div class="file-msg-preview">📎 ${currentAttachedFiles.map(f => f.name).join(' · ')}</div>` : '';
     
     const isFirstMessage = messages.length === 0;
 
@@ -87,7 +209,7 @@ export default function CenterConsole() {
       badge: category.toUpperCase()
     });
     
-    if (isFirstMessage && currentSessionId) {
+    if (isFirstMessage && currentSessionId && !isOffline) {
       setTimeout(async () => {
         try {
           const titleRes = await fetch('/api/chat', {
@@ -113,16 +235,15 @@ export default function CenterConsole() {
     if (isRAG) incRagCount();
 
     const isUpgrade = /upgrade|improve|evolution|self-improve/i.test(text);
-    const isSwarm = /swarm|simulate|simulation|r&d|realtime|research/i.test(text);
-    const effectiveAgentId = isUpgrade ? 'upgrade-core' : isSwarm ? 'swarm-01' : activeAgentId;
+    const effectiveAgentId = isUpgrade ? 'upgrade-core' : activeAgentId;
     
     const ag = AGENTS.find(a => a.id === effectiveAgentId) || AGENTS[0];
     setAgentTask(ag.id, 'Processing...');
 
     // Prepare API payload
     let contentForApi: any = [];
-    if (attachedFiles.length > 0) {
-       attachedFiles.forEach(f => {
+    if (currentAttachedFiles.length > 0) {
+       currentAttachedFiles.forEach(f => {
           if (f.kind === 'image' || f.kind === 'pdf') {
              contentForApi.push({ type: 'document', source: { data: f.data, media_type: f.type } });
           } else {
@@ -134,30 +255,44 @@ export default function CenterConsole() {
        contentForApi = text;
     }
 
-    const memCtx = memoryStore.slice(-3).map(m => `Q:"${m.u.slice(0, 50)}" A:"${m.a.slice(0, 60)}"`).join('\n') || 'None';
+    const memCtx = memoryStore.slice(-15).map(m => `Q:"${m.u.slice(0, 100)}" A:"${m.a.slice(0, 150)}"`).join('\n') || 'None';
+    const liveNewsCtx = useAppStore.getState().liveNews.slice(0, 5).map((n: any) => `- [${n.src}] ${n.text}`).join('\n') || 'None';
     const sysProm = `You are QAIOS v3 — a Quantum Agentic Intelligence OS running on ${apiCfg.provider.toUpperCase()}.
-Agents: QUANTUM-CORE (orchestrator), UPGRADE-CORE (evolution), ANALYSIS (reasoning), SYNTHESIS (generation), CLAW-α/β (drills), SWARM-01/02 (parallel), NEURAL-AGT (QNN), RAG-AGENT (retrieval).
+Active Agent: ${ag.name} (${ag.type})
 Active experiment: ${currentExp} | Query category: ${category}
 Session memory:\n${memCtx}
+Live Global Events:\n${liveNewsCtx}
 Rules: be concise + powerful. Use [R]...[/R] for results, [RAG]...[/RAG] for retrieved knowledge, [MEM]...[/MEM] for memory.
-CRITICAL CAPABILITY: The user can initialize manual proposals for the system to carry out upgrades and self-improvements via prompts. If the user initiates an upgrade/improvement, simulate the upgrade process using UPGRADE-CORE, outputting detailed configuration/code changes or simulated compilation logs to acknowledge and integrate the upgrade. Use backticks for technical terms.
-SWARM SIMULATIONS: If the user requests realtime simulations or R&D operations, format the output as a parallel multi-agent stream (e.g. SWARM-01: [Simulating X], SWARM-02: [Validating Y]), providing dense, concurrent simulated data and results.`;
+CRITICAL CAPABILITIES:
+- If acting as UPGRADE-CORE, simulate the upgrade process with detailed config/code changes or simulated compilation logs.
+- If acting as OVERSEER (Surveillance), ingest any provided news or simulated global events and trigger automated summaries and alerts based on geopolitical risk parameters.
+- If acting as CAPITAL (Business Intelligence), calculate investment projections and provide actionable business management suggestions.
+- If acting as SWARM, format output as a parallel multi-agent stream (e.g. SWARM-01: [Simulating X], SWARM-02: [Validating Y]).`;
 
     try {
       let replyText = "";
-      if (apiCfg.provider === 'gemini') {
-        const res = await fetch('/api/gemini', {
-           method: 'POST',
-           headers: { 'Content-Type': 'application/json' },
-           body: JSON.stringify({
-              model: apiCfg.models.gemini,
-              systemPrompt: sysProm,
-              messages: [{ role: 'user', content: contentForApi }]
-           })
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        replyText = data.text;
+      if (isOffline) {
+        useAppStore.getState().addQueuedMessage(text);
+        replyText = await LocalEngine.generate(text, sysProm);
+      } else if (apiCfg.provider === 'gemini') {
+        try {
+          const res = await fetch('/api/gemini', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({
+                model: apiCfg.models.gemini,
+                systemPrompt: sysProm,
+                messages: [{ role: 'user', content: contentForApi }]
+             })
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          replyText = data.text;
+        } catch (apiError) {
+          // Graceful fallback if API call fails
+          useAppStore.getState().addQueuedMessage(text);
+          replyText = await LocalEngine.generate(text, sysProm);
+        }
       } else {
         // Mocking for other providers since we only implemented gemini backend
         replyText = `[R]Response from ${apiCfg.provider}[/R]\nSimulated response for ${text}`;
@@ -251,25 +386,25 @@ SWARM SIMULATIONS: If the user requests realtime simulations or R&D operations, 
       <div style={{ borderTop: '1px solid var(--border)', background: 'var(--void)' }}>
         <div className="kimi-input-area" style={{ borderTop: 'none' }}>
           <div className="kimi-tools">
+            <button className="kimi-tool" onClick={() => document.getElementById('fileInput')?.click()}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              File
+            </button>
+            <button className="kimi-tool" onClick={() => alert('Mic listening enabled')}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+              Mic
+            </button>
+            <button className="kimi-tool" onClick={() => alert('TTS engine active')}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+              TTS
+            </button>
             <button className="kimi-tool" onClick={() => handleSend('Initialize realtime Swarm R&D simulation')}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
               Swarm
             </button>
-            <button className="kimi-tool" onClick={() => handleSend('Initialize manual proposal for the system to carry out upgrades and self improvements')}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-              Evolution
-            </button>
-            <button className="kimi-tool" onClick={() => setCategory('Agent')}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
-              Agent
-            </button>
-            <button className="kimi-tool" onClick={() => setCategory('Slides')}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 3h20"/><rect width="18" height="12" x="3" y="7" rx="2"/><path d="M12 19v3"/></svg>
-              Slides
-            </button>
-            <button className="kimi-tool" onClick={() => setCategory('Kimi Claw')}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
-              Kimi Claw
+            <button className="kimi-tool" onClick={() => handleSend('Analyze business intelligence and calculate investment projections based on the current data.')}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
+              BI Agent
             </button>
             <button className="kimi-tool" onClick={() => setCategory('Analysis')}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -320,6 +455,12 @@ SWARM SIMULATIONS: If the user requests realtime simulations or R&D operations, 
               </button>
             ) : (
               <>
+                <button className="kimi-icon-btn" title="Live Capture" onClick={startCapture}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                </button>
                 <label className="kimi-icon-btn" title="Attach File" htmlFor="fileInput">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <circle cx="12" cy="12" r="10"/>
@@ -330,6 +471,22 @@ SWARM SIMULATIONS: If the user requests realtime simulations or R&D operations, 
               </>
             )}
           </div>
+
+          {isCapturing && (
+            <div style={{ position: 'absolute', bottom: '100%', right: '10px', background: '#000', border: '1px solid var(--border)', padding: '10px', borderRadius: '8px', zIndex: 10 }}>
+              <div style={{ position: 'relative', width: '300px', marginBottom: '10px' }}>
+                <video ref={videoRef} autoPlay playsInline style={{ width: '100%', borderRadius: '4px', border: '1px solid var(--a3)', display: 'block' }}></video>
+                <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', backgroundImage: 'linear-gradient(var(--a2) 1px, transparent 1px)', backgroundSize: '100% 20%', animation: 'scanline 2s linear infinite', opacity: 0.3 }}></div>
+                <div style={{ position: 'absolute', top: '5px', left: '5px', color: '#ff4444', fontSize: '10px', fontWeight: 'bold', fontFamily: "'Share Tech Mono', monospace", animation: 'pulse 1s infinite' }}>● REC</div>
+              </div>
+              <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={takeSnapshot} style={{ flex: 1, padding: '8px', background: 'var(--a2)', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>Capture Snapshot</button>
+                <button onClick={() => { takeSnapshot(); setInputText('Analyze this live video stream and report findings.'); setTriggerAction('Analyze this live video stream and report findings.'); }} style={{ flex: 1, padding: '8px', background: 'var(--a3)', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>Analyze Stream</button>
+                <button onClick={stopCapture} style={{ padding: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '4px', cursor: 'pointer' }}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

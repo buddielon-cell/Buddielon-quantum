@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react';
 import { RSS_FEEDS, FALLBACK_NEWS } from '../constants';
+import { useAppStore } from '../store';
 
 export default function NewsTicker() {
-  const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const { isOffline, liveNews, setLiveNews } = useAppStore();
 
   const fetchNews = async () => {
+    if (isOffline) {
+      setLiveNews([...FALLBACK_NEWS]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const results = await Promise.allSettled(
@@ -36,28 +42,30 @@ export default function NewsTicker() {
         [fetched[i], fetched[j]] = [fetched[j], fetched[i]];
       }
       
-      setItems(fetched);
+      setLiveNews(fetched);
     } catch (e) {
-      setItems([...FALLBACK_NEWS]);
+      setLiveNews([...FALLBACK_NEWS]);
     }
     setLoading(false);
   };
 
   useEffect(() => {
     fetchNews();
-    const interval = setInterval(fetchNews, 600000); // 10 min
+    const interval = setInterval(fetchNews, 60000); // 1 min for realtime
     return () => clearInterval(interval);
-  }, []);
+  }, [isOffline]);
 
-  const doubled = [...items, ...items];
+  const doubled = [...liveNews, ...liveNews];
 
   return (
     <div className="news-ticker">
       <div className="ticker-brand">⬡ LIVE</div>
-      <div className="ticker-label">{loading ? '● LOADING' : '● LIVE'}</div>
+      <div className="ticker-label" style={{ color: isOffline ? '#888' : 'var(--gold)' }}>
+        {isOffline ? '● OFFLINE' : loading ? '● LOADING' : '● LIVE'}
+      </div>
       <div className="ticker-scroll">
         <div className="ticker-inner">
-          {loading ? (
+          {loading && !isOffline ? (
             <span className="news-loading">⟳ Fetching live world news — sports · politics · science · geopolitics · entertainment · health · finance...</span>
           ) : (
             doubled.map((n, idx) => (

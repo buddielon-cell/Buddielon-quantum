@@ -1,7 +1,20 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, StateStorage, createJSONStorage } from 'zustand/middleware';
+import { get, set, del } from 'idb-keyval';
 import { Agent, Session, Message, AttachedFile, ApiConfig } from './types';
 import { AGENTS, QSTATES } from './constants';
+
+const idbStorage: StateStorage = {
+  getItem: async (name: string): Promise<string | null> => {
+    return (await get(name)) || null;
+  },
+  setItem: async (name: string, value: string): Promise<void> => {
+    await set(name, value);
+  },
+  removeItem: async (name: string): Promise<void> => {
+    await del(name);
+  },
+};
 
 interface AppState {
   currentView: string;
@@ -23,6 +36,9 @@ interface AppState {
   messages: Message[];
   addMessage: (msg: Message) => void;
   setMessages: (msgs: Message[]) => void;
+  queuedMessages: string[];
+  addQueuedMessage: (msg: string) => void;
+  clearQueuedMessages: () => void;
   isThinking: boolean;
   setIsThinking: (val: boolean) => void;
   memoryStore: { u: string; a: string }[];
@@ -39,6 +55,10 @@ interface AppState {
   setIsModalOpen: (val: boolean) => void;
   triggerAction: string | null;
   setTriggerAction: (val: string | null) => void;
+  isOffline: boolean;
+  setIsOffline: (val: boolean) => void;
+  liveNews: any[];
+  setLiveNews: (news: any[]) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -96,12 +116,15 @@ export const useAppStore = create<AppState>()(
           s.id === state.currentSessionId ? { ...s, history: msgs, messages: msgs.length, updatedAt: Date.now() } : s
         )
       })),
+      queuedMessages: [],
+      addQueuedMessage: (msg) => set((state) => ({ queuedMessages: [...state.queuedMessages, msg] })),
+      clearQueuedMessages: () => set({ queuedMessages: [] }),
       isThinking: false,
       setIsThinking: (val) => set({ isThinking: val }),
       memoryStore: [],
       addMemory: (u, a) => set((state) => {
         const mem = [...state.memoryStore, { u, a }];
-        if (mem.length > 15) mem.shift();
+        if (mem.length > 50) mem.shift();
         return { memoryStore: mem };
       }),
       ragCount: 0,
@@ -120,10 +143,15 @@ export const useAppStore = create<AppState>()(
       isModalOpen: false,
       setIsModalOpen: (val) => set({ isModalOpen: val }),
       triggerAction: null,
-      setTriggerAction: (val) => set({ triggerAction: val })
+      setTriggerAction: (val) => set({ triggerAction: val }),
+      isOffline: !navigator.onLine,
+      setIsOffline: (val) => set({ isOffline: val }),
+      liveNews: [],
+      setLiveNews: (news) => set({ liveNews: news })
     }),
     {
       name: 'claw-ai-store',
+      storage: createJSONStorage(() => idbStorage),
       partialize: (state) => ({
         currentExp: state.currentExp,
         apiCfg: state.apiCfg,
@@ -133,6 +161,7 @@ export const useAppStore = create<AppState>()(
         memoryStore: state.memoryStore,
         ragCount: state.ragCount,
         fileCount: state.fileCount,
+        queuedMessages: state.queuedMessages,
       }),
     }
   )

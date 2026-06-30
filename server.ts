@@ -36,7 +36,9 @@ async function startServer() {
                 return { inlineData: { data: base64Data, mimeType: mimeType || "image/jpeg" } };
               }
               if (c.type === "document") {
-                 return { inlineData: { data: c.source?.data, mimeType: c.source?.media_type || "application/pdf" } };
+                 const dataUrl = c.source?.data;
+                 const base64Data = dataUrl?.includes(',') ? dataUrl.split(",")[1] : dataUrl;
+                 return { inlineData: { data: base64Data, mimeType: c.source?.media_type || "application/pdf" } };
               }
               return { text: JSON.stringify(c) };
             })

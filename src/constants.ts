@@ -9,6 +9,10 @@ export const AGENTS = [
   {id:'swarm-02',    name:'SWARM-02',     type:'SWARM',        short:'S2', color:'#00ddcc',    avClass:'av-teal', task:'Sync · listening'},
   {id:'neural-agt',  name:'NEURAL-AGT',   type:'NEURAL',       short:'NA', color:'#ff44aa',    avClass:'av-pink', task:'Neural layers warm'},
   {id:'rag-agent',   name:'RAG-AGENT',    type:'RAG',          short:'RA', color:'#aaaaff',    avClass:'av-blue', task:'Index loaded · ready'},
+  {id:'builder',     name:'DEV-BUILDER',  type:'ENGINEERING',  short:'DB', color:'#00ff00',    avClass:'av-green', task:'Code & App Builder ready'},
+  {id:'drone-ctrl',  name:'DRONE-CTRL',   type:'LOGISTICS',    short:'DC', color:'#ff00ff',    avClass:'av-pink', task:'Drone management & routing'},
+  {id:'surveil',     name:'OVERSEER',     type:'SURVEILLANCE', short:'OV', color:'#ff0000',    avClass:'av-red', task:'Global surveillance engine active'},
+  {id:'finance',     name:'CAPITAL',      type:'BUSINESS',     short:'CA', color:'#ffff00',    avClass:'av-gold', task:'Financial & Investment analysis'},
 ];
 
 export const OR_FREE_MODELS = [

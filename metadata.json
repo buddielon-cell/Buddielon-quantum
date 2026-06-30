@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
-  "requestFramePermissions": [],
+  "name": "World Monitor OS",
+  "description": "Quantum Agentic OS for monitoring and intelligence.",
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

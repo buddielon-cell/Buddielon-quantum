@@ -10,11 +10,19 @@ export default function SidebarLeft() {
   const [ragW, setRagW] = useState(83);
   const [nnW, setNnW] = useState(91);
   const [metrics, setMetrics] = useState({ coh: '127 µs', fid: '99.4%', err: '0.6%', t: '15 mK' });
-  const [agentLoads, setAgentLoads] = useState<number[]>(AGENTS.slice(0, 5).map(() => 50));
+  const [agentLoads, setAgentLoads] = useState<number[]>(AGENTS.map(() => 50));
   const [sessionSearch, setSessionSearch] = useState('');
   const [sessionSort, setSessionSort] = useState<'updated' | 'alpha'>('updated');
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editSessionName, setEditSessionName] = useState('');
+
+  // Drone states
+  const [drones, setDrones] = useState([
+    { id: 'Alpha-01', status: 'PATROL', battery: 89, alt: '1200m' },
+    { id: 'Beta-09', status: 'CHARGING', battery: 12, alt: '0m' },
+    { id: 'Gamma-44', status: 'INTERCEPT', battery: 67, alt: '3400m' },
+    { id: 'Delta-12', status: 'IDLE', battery: 98, alt: '0m' },
+  ]);
 
   useEffect(() => {
     const int = setInterval(() => {
@@ -27,7 +35,12 @@ export default function SidebarLeft() {
         err: (0.4 + Math.random() * 0.4).toFixed(2) + '%',
         t: (12 + Math.random() * 6).toFixed(1) + ' mK'
       });
-      setAgentLoads(AGENTS.slice(0, 5).map(() => Math.floor(25 + Math.random() * 60)));
+      setAgentLoads(AGENTS.map(() => Math.floor(25 + Math.random() * 60)));
+      setDrones(prev => prev.map(d => ({
+        ...d,
+        battery: Math.max(0, d.battery - (d.status === 'CHARGING' ? -2 : 1)),
+        alt: d.status === 'CHARGING' || d.status === 'IDLE' ? '0m' : Math.floor(1000 + Math.random() * 3000) + 'm'
+      })));
     }, 2800);
     return () => clearInterval(int);
   }, []);
@@ -236,6 +249,18 @@ export default function SidebarLeft() {
               Mem entries: <span style={{ color: 'var(--gold)' }}>{memoryStore.length}</span>
             </div>
           </div>
+
+          <div className="r-section">
+            <div className="r-title">⬡ Persistent Memory</div>
+            <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '8px', color: 'var(--dim)', lineHeight: 1.5, maxHeight: '200px', overflowY: 'auto' }}>
+              {memoryStore.length === 0 ? 'No persistent memory entries.' : memoryStore.slice(-10).reverse().map((m, idx) => (
+                <div key={idx} style={{ marginTop: '8px', borderLeft: '1px solid var(--border)', paddingLeft: '6px' }}>
+                   <div style={{ color: 'var(--text)' }}>Q: {m.u.substring(0, 30)}...</div>
+                   <div style={{ color: 'var(--a2)' }}>A: {m.a.substring(0, 40)}...</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -243,16 +268,16 @@ export default function SidebarLeft() {
         <div className="left-scroll">
           <div className="r-section">
             <div className="r-title">◈ Agent Load</div>
-            {AGENTS.slice(0, 5).map((a, i) => {
+            {AGENTS.map((a, i) => {
               const cls = a.type === 'SWARM' ? 'fill-purple' : a.type === 'NEURAL' ? 'fill-green' : 'fill-gold';
-              const v = agentLoads[i];
+              const v = agentLoads[i] || 0;
               return (
                 <div key={a.id} style={{ marginBottom: '5px' }}>
                   <div className="metric-row">
                     <span className="metric-label" style={{ fontSize: '8px' }}>{a.name}</span>
                     <span className="metric-val" style={{ color: a.color, fontSize: '9px' }}>{v}%</span>
                   </div>
-                  <div className="prog"><div className={`prog-fill ${cls}`} style={{ width: `${v}%` }}></div></div>
+                  <div className="prog"><div className={`prog-fill ${cls}`} style={{ width: `${v}%`, background: a.color }}></div></div>
                 </div>
               );
             })}
@@ -268,6 +293,49 @@ export default function SidebarLeft() {
                 </div>
                 <div className="ac-task">{agentTasks[a.id]}</div>
                 <span className="ac-type" style={{ background: `${a.color}22`, color: a.color }}>{a.type}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className={`tab-content ${currentView === 'drones' ? 'active' : ''}`}>
+        <div className="left-scroll">
+          <div className="r-section">
+            <div className="r-title">🚁 Drone Fleet Telemetry</div>
+            {drones.map(d => (
+              <div key={d.id} className="agent-card" style={{ marginBottom: '10px' }}>
+                <div className="ac-hdr">
+                  <span className="ac-name" style={{ color: d.status === 'PATROL' ? 'var(--a2)' : d.status === 'INTERCEPT' ? 'var(--a3)' : 'var(--gold)' }}>{d.id}</span>
+                  <div className="ac-dot" style={{ background: d.status === 'IDLE' ? '#555' : d.status === 'CHARGING' ? 'var(--gold)' : 'var(--a2)' }}></div>
+                </div>
+                <div className="ac-task">Status: {d.status}</div>
+                <div className="ac-task">Altitude: {d.alt}</div>
+                <div className="metric-row" style={{ marginTop: '5px' }}>
+                  <span className="metric-label" style={{ fontSize: '8px' }}>BATTERY</span>
+                  <span className="metric-val" style={{ color: d.battery > 20 ? 'var(--a2)' : 'var(--a3)' }}>{d.battery}%</span>
+                </div>
+                <div className="prog"><div className="prog-fill fill-green" style={{ width: `${d.battery}%`, background: d.battery > 20 ? 'var(--a2)' : 'var(--a3)' }}></div></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className={`tab-content ${currentView === 'channels' ? 'active' : ''}`}>
+        <div className="left-scroll">
+          <div className="r-section">
+            <div className="r-title">📡 Global Channels Directory</div>
+            {['News & Politics', 'Sports', 'Movies', 'Documentary', 'National Geographic', 'Financial News', 'Sci-Fi & Tech'].map(c => (
+              <div key={c} className="agent-card" style={{ marginBottom: '5px', cursor: 'pointer' }} onClick={() => {
+                useAppStore.getState().setTriggerAction(`Switch feed to ${c} channel`);
+                useAppStore.getState().setCurrentView('chat');
+              }}>
+                <div className="ac-hdr">
+                  <span className="ac-name" style={{ color: 'var(--text)' }}>{c}</span>
+                  <div className="ac-dot" style={{ background: 'var(--dim)' }}></div>
+                </div>
+                <div className="ac-task" style={{ color: 'var(--dim)' }}>Tap to tune in and monitor</div>
               </div>
             ))}
           </div>
